@@ -1,0 +1,764 @@
+---
+title: "Etude de cas statistique Cofitypotel"
+output:
+  word_document: default
+  pdf_document: default
+  html_notebook: default
+---
+#Chargement des packages
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ade4)
+library(Hmisc)
+library(gridExtra)
+library(lubridate)
+library(explor)
+library(FactoMineR)
+library(factoextra)
+library(Factoshiny)
+library(Hmisc)
+```
+
+#Importation des données
+
+```{r}
+data<-read.csv2("duplication.csv",header=TRUE)
+head(data)
+```
+Nous avons donc la table ayant 2495 observations pour 61 variables dont certaines qui ne nous seront pas utiles dans notre analyse.
+
+#Au niveau de l'étude préalable des données
+```{r}
+str(data)
+getColumnIndexByColname <- function(df, cn) {
+  return(
+    # which(colnames(df) == cn)
+    grep(pattern = cn, x = colnames(df))
+  )
+}
+getColumnIndexByColname(data,"moyen")
+data<-data[,-c(52,55)]
+```
+Nous allons essayer de convertir les différentes durées au bon format pour les analyses (c'est à dire heures pour les durées totales et minutes pour les durées moyennes)
+
+```{r}
+
+#Convertissons les durées en minutes et les durées totales en heures
+
+#Temps total de disponibilité
+data$temps.total.de.disponibilité<-hms(data$temps.total.de.disponibilité)
+data$temps.total.de.disponibilité<-(
+  hour(data$temps.total.de.disponibilité)+
+    (minute(data$temps.total.de.disponibilité)/60)+
+    (second(data$temps.total.de.disponibilité)/3600))
+summary(data$temps.total.de.disponibilité)
+
+#Temps total de conversation sur appels entrants
+data$temps.total.de.conversation.sur.appels.entrants<-hms(data$temps.total.de.conversation.sur.appels.entrants)
+data$temps.total.de.conversation.sur.appels.entrants<-(
+  hour(data$temps.total.de.conversation.sur.appels.entrants)+
+    (minute(data$temps.total.de.conversation.sur.appels.entrants)/60)+
+    (second(data$temps.total.de.conversation.sur.appels.entrants)/3600))
+summary(data$temps.total.de.conversation.sur.appels.entrants)
+
+#Temps moyen de conversation sur appels entrants
+data$temps.moyen.de.conversation.sur.appels.entrants<-hms(data$temps.moyen.de.conversation.sur.appels.entrants)
+data$temps.moyen.de.conversation.sur.appels.entrants<-(
+  hour(data$temps.moyen.de.conversation.sur.appels.entrants)*60+
+    (minute(data$temps.moyen.de.conversation.sur.appels.entrants))+
+    (second(data$temps.moyen.de.conversation.sur.appels.entrants)/60))
+
+#Temps total de conversation sur appels sortants
+data$temps.total.conversation.sur.appels.sortants<-hms(data$temps.total.conversation.sur.appels.sortants)
+data$temps.total.conversation.sur.appels.sortants<-(
+  hour(data$temps.total.conversation.sur.appels.sortants)+
+    (minute(data$temps.total.conversation.sur.appels.sortants)/60)+
+    (second(data$temps.total.conversation.sur.appels.sortants)/3600))
+
+#Temps total de conversation
+data$temps.total.de.conversation<-hms(data$temps.total.de.conversation)
+data$temps.total.de.conversation<-(
+  hour(data$temps.total.de.conversation)+
+    (minute(data$temps.total.de.conversation)/60)+
+    (second(data$temps.total.de.conversation)/3600))
+
+#Temps total de retrait
+data$temps.total.de.retrait<-hms(data$temps.total.de.retrait)
+data$temps.total.de.retrait<-(
+  hour(data$temps.total.de.retrait)+
+    (minute(data$temps.total.de.retrait)/60)+
+    (second(data$temps.total.de.retrait)/3600))
+#Ajout de la variable temps total de travail
+data$temps.total.de.travail<-0
+data$temps.total.de.travail<-(data$temps.total.de.disponibilité + data$temps.total.de.retrait)
+summary(data$temps.total.de.travail)
+
+#Ajout de la variable temps moyen de conversation sur appels sortants
+data$temps.moyen.de.conversation.sur.appels.sortants<-((data$temps.total.conversation.sur.appels.sortants/
+                                                         data$nb.appels.sortants)*60)
+
+summary(data$temps.moyen.de.conversation.sur.appels.sortants)
+```
+Au vu de certaines observations devenues des NA du fait de quotients par des valeurs nulles par endroit ou des valeurs manquantes, nous avons décidé de les supprimer
+```{r}
+data<-na.omit(data)
+```
+
+#Détection des valeurs aberrantes et suppression de ces dernières
+Avant d'analyser les différentes valeurs aberrantes, nous avons également eu l'idée de créer des variables de type ratio de sorte à endiguer les problèmes liés aux différences de régime de travail (temps plein-temps partiel)
+```{r include= FALSE}
+describe(data)
+data$ratiowrapup<-ifelse(data$temps.total.de.retrait==0,0,
+                         data$temps.total.de.retrait/data$temps.total.de.travail)
+data$ratio.appels.entrants<-ifelse(data$temps.total.de.travail==0,0,
+                                   data$temps.total.de.conversation.sur.appels.entrants/data$temps.total.de.travail)
+
+data$ratio.appels.sortants<-ifelse(data$temps.total.de.travail==0,
+                                0,data$temps.total.conversation.sur.appels.sortants/data$temps.total.de.travail)
+
+data$taux.de.decroché<-ifelse(data$Appels.présentés==0,0, data$Appels.pris/data$Appels.présentés)
+```
+*Ajout de variables permettant de tracer la temporalité des évènements
+```{r}
+#En attendant de corriger avec les années et les mois
+str(data$Période)
+#En attendant de corriger avec les années et les mois
+dmy<-dmy(data$Période)
+table(year(dmy))
+table(month(dmy))
+table(quarter(dmy))
+# Make the years, months and quarters be factors
+data$year <- year(dmy)
+data$month <- month(dmy)
+data$quarter <- quarter(dmy)
+# Remove the two unnecessary columns
+data <- data[, !(names(data) %in% c("Période", "trimestre"))]
+
+
+
+#Ajout de variables repertoriant les numéros absolus des mois
+data$month_abs_num <- ifelse(data$year == 2003, data$month, data$month + 12)
+# Add a column with quarter's absolute number
+data$quarter_abs_num <- ifelse(data$year == 2003, data$quarter, data$quarter + 4)
+
+```
+*Etude des valeurs aberrantes au niveau des différentes variables
+```{r}
+summary(data)
+#Conversion en facteur des différents éléments
+data$year<-as.factor(data$year)
+data$month<-as.factor(data$month)
+data$month_abs_num<-as.factor(data$month_abs_num)
+data$quarter<-as.factor(data$quarter)
+```
+  + Analyse sur le nombre d'appels sortants
+```{r}
+d1<-boxplot(data$nb.appels.sortants,main="Boxplot sur le nombre d'appels sortants effectués
+            par les agents", ylab="Nombre d'appels effectués")
+outlierd1<-boxplot.stats(data$nb.appels.sortants)$out
+outlierd1
+
+outlierd1.index<-which(data$nb.appels.sortants %in% c(outlierd1))
+outlierd1.index
+data<-data[-c(outlierd1.index),]
+summary(data$nb.appels.sortants)
+```
+  +Analyse sur le nombre d'appels pris par heure de disponibilité
+```{r}
+d2<-boxplot(data$nombre.d.appels.pris.par.heure.de.disponibilité,main="Boxplot sur le nombre
+            d'appels pris par heure de disponibilité des agents", ylab="Nombre d'appels pris par
+            heure de disponibilité")
+
+outlierd2<-boxplot.stats(data$nombre.d.appels.pris.par.heure.de.disponibilité)$out
+outlierd2
+
+outlierd2.index<-which(data$nombre.d.appels.pris.par.heure.de.disponibilité %in% c(outlierd2))
+outlierd2.index
+
+data<-data[-c(outlierd2.index),]
+summary(data$nombre.d.appels.pris.par.heure.de.disponibilité)
+```
+
+
+  + Ajout de détection d'outliers sur le temps total de conversation
+```{r}
+d3<-boxplot(data$temps.total.de.conversation,main="Boxplot sur le temps total de conversation")
+outlierd3<-boxplot.stats(data$temps.total.de.conversation)$out
+outlierd3.index<-which(data$temps.total.de.conversation %in% c(outlierd3))     
+outlierd3.index
+
+```
+
+
+ + Détection sur le temps total de retrait 
+```{r}
+d4<-boxplot(data$temps.total.de.retrait, main="Temps total de retrait")
+outlierd4<-boxplot.stats(data$temps.total.de.retrait)$out
+outlierd4
+outlierd4.index<-which(data$temps.total.de.retrait %in% c(outlierd4))
+outlierd4.index
+```
+Un moyen plus simple d'analyser les temps de retrait serait de s'intéresser directement aux ratios
+```{r}
+d8<-boxplot(data$ratiowrapup, main="Part du temps de retrait sur le temps total de travail")
+outlierd8<-boxplot.stats(data$ratiowrapup)$out
+outlierd8
+outlierd8.index<-which(data$ratiowrapup %in% c(outlierd8))
+outlierd8.index
+data<-data[-c(outlierd8.index),]
+```
+On peut remarquer que certains individus ont des temps de retrait beaucoup trop importants en comparaison à leur
+temps de travail (Exemple:100% du temps de travail étant en retrait et cela est impossible sur un mois).
+On va donc supprimer les valeurs aberrantes dans ce cas précis
+
+
+ 
+ + Détection sur le temps total de disponibilité
+```{r}
+d5<-boxplot(data$temps.total.de.disponibilité, main="Boxplot sur le temps total
+            de disponibilité des agents")
+outlierd5<-boxplot.stats(data$temps.total.de.disponibilité)$out
+outlierd5.index<-which(data$temps.total.de.disponibilité %in% c(outlierd5))
+outlierd5.index
+```
+
+
+  + Détection sur le temps moyen de conversation sur appels sortants
+```{r}
+d6<-boxplot(data$temps.moyen.de.conversation.sur.appels.sortants,
+            col = "blue", main="Boxplot sur le temps moyen
+            de conversation sur appels sortants",ylab="Temps moyen de conversation sur apppels
+            sortants")
+outlierd6<-boxplot.stats(data$temps.moyen.de.conversation.sur.appels.sortants)$out
+outlierd6
+outlierd6.index<-which(data$temps.moyen.de.conversation.sur.appels.sortants %in% c(outlierd6))
+outlierd6.index
+
+```
+
+
+  + Détection sur le temps moyen de conversation sur les appels entrants
+```{r}
+d7<-boxplot(data$temps.moyen.de.conversation.sur.appels.entrants,
+            col = "pink", main="Boxplot sur le temps moyen
+            de conversation sur appels entrants",ylab="Temps moyen de conversation sur apppels
+            entrants")
+outlierd7<-boxplot.stats(data$temps.moyen.de.conversation.sur.appels.entrants)$out
+outlierd7
+outlierd7.index<-which(data$temps.moyen.de.conversation.sur.appels.entrants %in% c(outlierd7))
+outlierd7.index
+```
+#Statistiques descriptives
+```{r}
+summary(data)
+```
+
+
+Nous allons essayer dans cette partie de catégoriser les variables de sorte à obtenir de nouvelles variables catégorielles pour l'ACM
+
+*Taux de retrait
+```{r}
+summary(data$ratiowrapup)
+#Moins de 15%, entre 15 et 20%, 20% et plus pour les ratios de wrapup
+summary(data$ratiowrapup)
+data$ratiowrapup.quali<-cut(data$ratiowrapup,c(0,0.15,0.20,1),
+                             include.lowest = TRUE, 
+                             labels = c("Moins de 15% de taux de retrait",
+                                        "Entre 15 et 20% de taux de retrait",
+                                        "Plus de 20% de taux de retrait"))
+summary(data$ratiowrapup.quali)
+```
+
+*Ratio appels entrants
+```{r}
+#Moins de 50%, entre 50 et 65% et plus de 65% pour ratio entrants
+summary(data$ratio.appels.entrants)
+data$ratio.appels.entrants.quali<-cut(data$ratio.appels.entrants,c(0,0.50,0.60,0.65,1),
+                                       include.lowest = TRUE,
+                                       labels=c("Moins de 50% d'appels entrants",
+                                       "Entre 50% et 60% d'appels entrants",
+                                        "Entre 60% et 65% d'appels entrants",
+                                        "Plus de 65% d'appels entrants"))
+summary(data$ratio.appels.entrants.quali)
+```
+
+*Taux de décroché
+```{r}
+#Moins de 95%, plus de 95% pour les taux de décroché
+summary(data$taux.de.decroché)
+data$taux.de.decroché.quali<-cut(data$taux.de.decroché,c(0,0.95,1),
+                                  include.lowest=TRUE, 
+                                  labels=c("Moins de 95% de taux de prise d'appels",
+                                           "Plus de 95% de taux de prise d'appels"))
+summary(data$taux.de.decroché.quali)
+```
+
+*Ratio appels sortants
+```{r}
+ #Moins de 5% d'appels sortants , entre 5% et 10% et plus de 10% (ratio appels sortants)
+summary(data$ratio.appels.sortants)
+data$ratio.appels.sortants.quali<-cut(data$ratio.appels.sortants,
+                                        c(0,0.05,0.1,1), include.lowest=TRUE,
+                                        labels=c("Moins de 5% d'appels sortants",
+                                                 "Entre 5% et 10% d'appels sortants",
+                                                 "Plus de 10% d'appels sortants"))
+summary(data$ratio.appels.sortants.quali)
+```
+*Au niveau du temps moyen de conversation sur appels sortants
+On gardera (moins de 1min; entre 1 et 1min30 et plus de 1.5 min)
+```{r}
+summary(data$temps.moyen.de.conversation.sur.appels.sortants)
+
+data$temps.moyen.de.conversation.sur.appels.sortants.quali<-cut(data$temps.moyen.de.conversation.sur.appels.sortants, c(0,1,1.5,21), include.lowest = TRUE,labels=c("Moins de 1 min moyen sortants",
+                                                   "Entre 1 et 1.5 min moyen sortants", 
+                                                    "Plus de 1.5 min moyen sortants"))
+
+summary(data$temps.moyen.de.conversation.sur.appels.sortants.quali)
+```
+
+*Au niveau des temps moyens de conversation sur appels entrants
+```{r}
+#Moins de 2 min, entre 2 et 3 min et plus de 3 min (temps moyen appels entrants)
+summary(data$temps.moyen.de.conversation.sur.appels.entrants)
+
+data$temps.moyen.de.conversation.sur.appels.entrants.quali<-cut(data$temps.moyen.de.conversation.sur.appels.entrants, c(0,2,2.5,3,7), include.lowest = TRUE,labels=c("Moins de 2 min moyen entrants","Entre 2 et 2.5 min moyen entrants","Entre 2.5 min et 3 min moyen entrants","Plus de 3 min moyen entrants"))
+
+summary(data$temps.moyen.de.conversation.sur.appels.entrants.quali)
+```
+*Nombre d'appels pris par heure de disponibilité
+```{r}
+summary(data$nombre.d.appels.pris.par.heure.de.disponibilité)
+data$nombre.d.appels.pris.par.heure.de.disponibilité.quali<-cut(data$nombre.d.appels.pris.par.heure.de.disponibilité, c(0,18,22,30),include.lowest=TRUE,labels=c("Moins de 18 appels par heure de dispo",
+                                                  "Entre 18 et 22 appels par heure de dispo",
+                                                  "Plus de 22 appels par heure de dispo"))
+summary(data$nombre.d.appels.pris.par.heure.de.disponibilité.quali)
+```
+
+##Quelques graphiques pour les statistiques descriptives
+
+Tout d'abord, nous constituons une nouvelle table qui nous permettra d'étudier nos données
+```{r}
+data_study<-data
+rownames(data_study) <- paste0(data_study$code.OP %>% as.character(), "_", data_study$month_abs_num)
+head(data_study)
+```
+
+
+
+
+#Construction de l'ACM
+
+Nous allons tout d'abord commencer par établir une nouvelle table contenant les variables nous intéressant pour l'ACM
+```{r}
+getColumnIndexByColname(data,"quali")
+getColumnIndexByColname(data,"month")
+data_acm<-data[,c(2:4,65,67,69:75)]
+str(data_acm)
+rownames(data_acm) <- paste0(data_acm$code.OP %>% as.character(), "_", data_acm$month_abs_num) 
+data_acm<-data_acm[,-c(1,5)]
+data_acm<-data_acm[,-c(3)]
+head(data_acm)
+```
+
+Une fois le jeu de données constitué pour l'ACM, il convient de lancer son exécution
+```{r}
+cpanalysis<-MCA(data_acm,graph = FALSE)
+```
+
+*Analyse des différents résultats de l'ACM
+```{r}
+eig.val <- get_eigenvalue(cpanalysis)
+head(eig.val)
+```
+
+Visualisation du graphique sur les pourcentages de variance expliquée
+```{r}
+fviz_screeplot (cpanalysis, addlabels = TRUE, ylim = c (0,13))
+```
+En appliquant le critère du coude, nous ne retiendrons que 4 axes pour la construction de notre classification
+
+##Bi-plot sur les individus et les variables
+```{r}
+fviz_mca_biplot (cpanalysis, repel = FALSE, 
+               ggtheme = theme_minimal())
+```
+
+```{r}
+#explor(cpanalysis)
+```
+
+
+Nous allons analyser les corrélations des variables avec les différents axes
+```{r}
+fviz_mca_var (cpanalysis, choice = "mca.cor",
+            repel = TRUE, 
+            ggtheme = theme_minimal ())
+```
+Les coordonnées des modalités sur les différents axes
+
+```{r}
+head(round(cpanalysis$var$coord, 2))
+fviz_mca_var (cpanalysis,
+             repel = TRUE, 
+             ggtheme = theme_minimal ())
+```
+
+Au niveau de la qualité de représentation des individus
+```{r}
+round(cpanalysis$var$cos2,2)
+```
+```{r}
+cp2<-MCA(data_acm, ncp = 4)
+res.hcpc <- HCPC (cp2, graph = FALSE,max = 6)
+# Dendrogramme
+fviz_dend(res.hcpc, show_labels = FALSE)
+```
+En representant cette fois les individus, nous obtenons ceci:
+```{r}
+# Individus
+fviz_cluster(res.hcpc, geom = "point", main = "Factor map")
+```
+##Description des différents groupes obtenus
+```{r}
+# Description par les catégories
+res.hcpc$desc.var$category
+```
+
+```{r}
+data_study$groupe<-res.hcpc$data.clust$clust
+summary(data_study$groupe)
+
+
+```
+
+*On obtient ainsi quatre groupes dont les caractéristiques sont les suivantes:
+  + G1= **Ils ne brassent que très peu d'appels**. Ils se concentrent essentiellement sur **les appels entrants** et ils ont tendance à prendre leur temps sur ce type d'appels (Ils sont plus dans l'accompagnement du client dans la réalisation du projet avec plus de 3 min en moyenne sur ce type d'appels). Ils sont généralement à temps partiel et NHML
+  + G2= **Ils brassent le plus d'appels**. Ils ne passent que très peu de temps sur les appels(entrants comme sortants) et de ce fait ont les taux de prise d'appels les plus élevés (de l'ordre de plus de 95%). Ils sont généralement à temps partiel mais HML.
+  + G3= **Ce sont les gens moyens/intermédiaires**. Ils brassent un nombre d'appels raisonnable (ni trop élevé ni trop faible). Leurs durées d'appels sur les deux types d'appels sont également raisonnables. Ils sont généralement à temps plein et HML
+  
+  + G4= **Ce sont des individus se concentrant sur les appels sortants**. Ils prennent en moyenne le plus de temps sur les appels sortants. De ce fait, ils ont naturellement un taux de prise d'appels relativement faible. Ils sont généralement HML et sont relativement hétérogènes même s'ils sont les moins nombreux
+  
+Il convient d'analyser les performances des individus sur les différents produits en prenant en compte le nombre de ventes ainsi que l'équivalent temps plein de la durée de travail des agents. (on se basera sur les acceptations)
+
+
+
+
+Il faut savoir que ce type de produit peut être octroyé à la demande du client ou proposé. Il passe par les mêmes canaux que les autres produits (c'est à dire qu'il peut être étudié en ligne ou demandé par téléphone). Dans ce cas précis, il sera étudié de manière globale.
+```{r}
+#Pour la formule Libravou FL
+data_study$FL.montant.total<-data_study$FL.SE.Montant.financé.sur.ouvertures+data_study$FL.MTL.Montant.financé
+data_study$FL.performance<-ifelse((data_study$FL.SE.Nombre.d.ouvertures+data_study$FL.MTL.Nombre.d.ouvertures)*data_study$Equivalent.temps.plein..obj.==0,0,data_study$FL.montant.total/((data_study$FL.SE.Nombre.d.ouvertures+data_study$FL.MTL.Nombre.d.ouvertures)*data_study$Equivalent.temps.plein..obj.))
+
+summary(data_study$FL.performance)
+
+#Pour l'augmentation de réserve (AUG FL)
+data_study$AUG.FL.montant.total<-data_study$AUG.FL.SE.Montant.financé.sur.augmentations+data_study$AUG.FL.MTL.Montant.financé.sur.augmentations
+
+data_study$AUG.FL.performance<-ifelse((data_study$AUG.FL.SE.Nb.total.d.acceptés+data_study$AUG.FL.MTL.Nb.total.d.acceptés)*data_study$Equivalent.temps.plein..obj.==0,0,data_study$AUG.FL.montant.total/((data_study$AUG.FL.SE.Nb.total.d.acceptés+data_study$AUG.FL.MTL.Nb.total.d.acceptés)*data_study$Equivalent.temps.plein..obj.))
+
+
+summary(data_study$AUG.FL.performance)
+
+#Pour l'amortissable affecté
+data_study$AMO.AFF.montant.total<-data_study$AMO.AFFECTE.SE.Montant.financé+data_study$AMO.AFFECTE.MTL.Montant.financé
+
+data_study$AMO.AFF.vente.harm<-ifelse((data_study$AMO.AFFECTE.SE.Nombre.d.ouvertures+data_study$AMO.AFFECTE.MTL.Nombre.d.ouvertures)*data_study$Equivalent.temps.plein..obj.==0,0,(data_study$AMO.AFFECTE.SE.Nombre.d.ouvertures+data_study$AMO.AFFECTE.MTL.Nombre.d.ouvertures)*data_study$Equivalent.temps.plein..obj)
+
+summary(data_study$AMO.AFF.vente.harm)
+
+data_study$AMO.AFF.performance<-ifelse(data_study$AMO.AFF.vente.harm==0,0,data_study$AMO.AFF.montant.total/data_study$AMO.AFF.vente.harm)
+
+summary(data_study$AMO.AFF.performance)
+
+#Pour l'amortissable non affecté
+data_study$AMO.NON.AFF.montant.total<- data_study$AMO.NON.AFF.MTL.Montant.financé+data_study$AMO.NON.AFF.SE.Montant.financé
+
+data_study$AMO.NON.AFF.vente.harm<-ifelse((data_study$AMO.NON.AFF.SE.Nombres.d.ouvertures+data_study$AMO.NON.AFF.MTL.Nombres.d.ouvertures)*data_study$Equivalent.temps.plein..obj.==0,0,(data_study$AMO.NON.AFF.SE.Nombres.d.ouvertures+data_study$AMO.NON.AFF.MTL.Nombres.d.ouvertures)*data_study$Equivalent.temps.plein..obj.)
+
+data_study$AMO.NON.AFF.performance<-ifelse(data_study$AMO.NON.AFF.vente.harm==0,0, data_study$AMO.NON.AFF.montant.total/data_study$AMO.NON.AFF.vente.harm)
+
+summary(data_study$AMO.NON.AFF.performance)
+```
+##Importation sous excel pour analyse
+```{r}
+#write.csv2(data_study, file="performance.csv")
+```
+
+##Analyse des performances concernant le produit AUG FL
+
+Essayons de visualiser les statistiques descriptives concernant la variable performance de ce produit
+```{r}
+describe(data_study$AUG.FL.performance)
+quantile(data_study$AUG.FL.performance,0.90)
+```
+Sur la base des hypothèses effectuées (sur le fait d'être un bon vendeur), nous pouvons créer une nouvelle variable qui nous permettra de tracer cela
+```{r}
+data_study$AUG.FL.bonvendeur<-ifelse(data_study$AUG.FL.performance>1386.60,1,0)
+data_study$AUG.FL.bonvendeur<-as.factor(data_study$AUG.FL.bonvendeur)
+summary(data_study$AUG.FL.bonvendeur)
+```
+Essayons d'étudier les différentes intéractions entre les variables pour savoir lesquelles devrions nous appuyer.
+```{r}
+data_quali<-data_study[,c(3,4,65,69:76,87)]
+str(data_quali)
+```
+```{r}
+library(questionr)
+library(FactoMineR)
+library(rlang)
+library(BioStatR)
+
+#Création d'une nouvelle matrice de Cramer
+mtx.cramer<-matrix(NA, nrow = ncol(data_quali), ncol = ncol(data_quali))
+rownames(mtx.cramer)=names(data_quali)
+colnames(mtx.cramer)=names(data_quali)
+mtx.cramer
+
+
+#Création de la boucle
+for (i in 1:ncol(data_quali)){
+  for (j in 1:ncol(data_quali)){
+    table_temp=table(data_quali[,c(i,j)])
+    mtx.cramer[i,j]=cramer.v(table_temp)
+  }
+}
+mtx.cramer
+```
+Dans ce cas précis, nous nous intéresserons aux liens entre les variables fortement liées entre elles (qui ont un V de Cramer supérieur à 0.30). Cette démarche est dans le but de savoir les variables que nous allons garder et celles que nous allons supprimer.
+
+ * Lien entre le nombre d'appels pris par heure de disponibilité et l'ETP
+```{r}
+table(data_study$ETP,data_study$nombre.d.appels.pris.par.heure.de.disponibilité.quali)
+#Les individus à temps plein étant majoritaires, il est normal qu'ils soient les plus représentés pour chaque catégorie de la variable nombre d'appels pris par heure de disponibilité
+chisq.test(data_study$ETP, data_study$nombre.d.appels.pris.par.heure.de.disponibilité.quali)
+#Les variables sont de fait liées entre elles. De ce fait, nous allons songer à laisser tomber la variable nombre d'appels pris par heure de disponibilité
+```
+  * Lien entre le groupe et le métier
+```{r}
+table(data_study$groupe,data_study$métier.2)
+chisq.test(data_study$groupe,data_study$métier.2)
+#Il existe bien une dépendance entre les deux variables (songer à retirer la variable groupe dans le modèle)
+```
+  *Lien entre le groupe et l'ETP (0.41)
+```{r}
+table(data_study$groupe,data_study$ETP)
+chisq.test(data_study$groupe,data_study$ETP)
+#On a un groupe majoritairement constitué d'individus à temps partiel et d'autres groupes
+#dans lesquels ils sont faiblement représentés. De ce fait, nous pouvons songer à abandonner la variable groupe
+```
+  
+ 
+ 
+  * Mois et le fait d'être bon vendeur
+```{r}
+table(data_study$month,data_study$AUG.FL.bonvendeur)
+#On peut constater que pendant les mois de décembre, de novembre et d'août, on rencontre le plus de bon vendeurs
+#tandis que les mois de septembre et de juillet sont les mois durant lesquels on trouve le plus de mauvais vendeurs en augmentation de réserves (Peut-être surconsommation durant décembre et l'été du fait des vacances et de la préparation de la rentrée)
+chisq.test(data_study$month,data_study$AUG.FL.bonvendeur)
+#Les deux variables sont liées (On laissera donc la variable mois dans le modèle)
+```
+  * Ratio d'appels sortants et ratio d'appels entrants
+```{r}
+table(data_study$ratio.appels.entrants.quali,data_study$ratio.appels.sortants.quali)
+chisq.test(data_study$ratio.appels.entrants.quali,data_study$ratio.appels.sortants.quali)
+#Il y a véritablement un clivage dans l'usage du temps de travail consacré aux appels chez les conseillers.
+#On pourrait songer à supprimer celui ayant le moins d'impact sur le fait d'être bon vendeur.
+
+```
+  *Bon vendeur et ratio appels entrants
+```{r}
+table(data_study$AUG.FL.bonvendeur, data_study$ratio.appels.entrants.quali)
+chisq.test(data_study$AUG.FL.bonvendeur, data_study$ratio.appels.entrants.quali)
+#Une bonne partie des bons vendeurs effectue plus de 60% d'appels entrants. Pour faire simple, plus de la moitié
+#d'entre eux consacre plus de la moitié de son temps de travail aux appels entrants.
+```
+  
+  * Groupe et ratio d'appels entrants
+```{r}
+table(data_study$groupe,data_study$ratio.appels.entrants.quali)
+chisq.test(data_study$groupe,data_study$ratio.appels.entrants.quali)#A revoir
+```
+
+  * Groupe et ratio d'appels sortants
+```{r}
+table(data_study$groupe,data_study$ratio.appels.sortants.quali)
+chisq.test(data_study$groupe,data_study$ratio.appels.sortants.quali) #A revoir
+```
+  
+  * Groupe et temps moyen de conversation sur appels entrants
+```{r}
+table(data_study$groupe, data_study$temps.moyen.de.conversation.sur.appels.entrants.quali)
+chisq.test(data_study$groupe, data_study$temps.moyen.de.conversation.sur.appels.entrants.quali)
+#Les deux variables sont liées (Nous devrions songer à retirer la variable groupe)
+```
+
+  * Nbre d'appels pris par heure de disponibilité et temps moyen de conversation sur appels entrants
+```{r}
+table(data_study$nombre.d.appels.pris.par.heure.de.disponibilité.quali, data_study$temps.moyen.de.conversation.sur.appels.entrants.quali)
+chisq.test(data_study$nombre.d.appels.pris.par.heure.de.disponibilité.quali, data_study$temps.moyen.de.conversation.sur.appels.entrants.quali)
+#On peut noter que ceux qui passent le moins de temps au téléphone sur les appels entrants sont ceux qui brassent le plus d'appels. De ce fait, on pourrait se dire que la variable nombre d'appels pris par heure de dispo n'est pas forcément nécessaire. De même pour l'autre variable ratio qui induit que le conseiller consacre une autre partie de son temps à autre chose 
+```
+  
+  * Groupe et nombre d'appels pris par heure de disponibilité
+```{r}
+table(data_study$nombre.d.appels.pris.par.heure.de.disponibilité.quali, data_study$groupe)
+chisq.test(data_study$nombre.d.appels.pris.par.heure.de.disponibilité.quali, data_study$groupe)
+#Cela reflète juste le constat qui avait été fait au début des statistiques descriptives
+```
+
+Nous allons effectuer  la construction du modèle sous sas
+```{r}
+data_sas<-data_study
+data_sas<-data_sas[,c(3,4,65,66,69:76,87)]
+str(data_sas)
+data_sas$month<-fct_recode(data_sas$month,
+                           "janvier"="1",
+                           "fevrier"="2",
+                           "mars"="3",
+                           "avril"="4",
+                           "mai"="5",
+                           "juin"="6",
+                           "juillet"="7",
+                           "aout"="8",
+                           "septembre"="9",
+                           "octobre"="10",
+                           "novembre"="11",
+                           "decembre"="12")
+
+data_sas$AUG.FL.bonvendeur<-fct_recode(data_sas$AUG.FL.bonvendeur,
+                            "Mauvais vendeur AUG FL"="0",
+                            "Bon vendeur AUG FL"="1")
+data_sas$groupe<-fct_recode(data_sas$groupe,
+                            "G1"="1",
+                            "G2"="2",
+                            "G3"="3",
+                            "G4"="4")
+data_sas$quarter<- fct_recode(data_sas$quarter,
+                              "q1"="1",
+                              "q2"="2",
+                              "q3"="3",
+                              "q4"="4")
+
+summary(data_sas$groupe)
+data_sas2<-tab.disjonctif(data_sas)
+write.csv2(data_sas2,file="last_import.csv")
+getColumnIndexByColname(data_study,"quarter")
+summary(data_sas)
+```
+
+
+#Elaboration d'un premier modèle de régression logistique
+```{r}
+#Elaboration des différents modèles de régression logistique
+model1<-glm(data_study$AUG.FL.bonvendeur~ data_study$ratiowrapup.quali+ data_study$métier.2+
+              data_study$taux.de.decroché.quali+data_study$ratio.appels.entrants.quali+
+              data_study$temps.moyen.de.conversation.sur.appels.entrants.quali+
+              data_study$temps.moyen.de.conversation.sur.appels.sortants.quali+
+              data_study$nombre.d.appels.pris.par.heure.de.disponibilité.quali+
+              data_study$ratio.appels.sortants.quali+data_study$ETP+data_study$groupe,family="binomial"
+            ,data=data_study)
+model1
+
+summary(model1)
+```
+
+#Elaboration du second modèle amélioré
+```{r}
+stepmodel1<-step(model1)
+AIC(model1)
+AIC(stepmodel1)
+anova(model1, stepmodel1, test = "Chisq")
+```
+
+```{r}
+AUG.PRED.pred <- predict(stepmodel1, type = "response", newdata = data_study)
+head(AUG.PRED.pred)
+table(AUG.PRED.pred > 0.5, data_study$AUG.FL.bonvendeur)
+```
+  
+```{r}
+summary(stepmodel1)
+```
+```{r}
+stepmodel2<-step(model1)
+```
+  
+```{r}
+summary(stepmodel2)
+```
+
+```{r}
+AUG.PRED2 <- predict(stepmodel1, type = "response", newdata = data_study)
+head(AUG.PRED2)
+table(AUG.PRED.pred > 0.5, data_study$AUG.FL.bonvendeur)
+```
+
+##Analyse des résidus
+```{r}
+par(mfrow = c(1, 1))
+plot(rstudent(stepmodel1), type = "p", cex = 0.5, ylab = "Résidus studentisés ", 
+    col = "springgreen2", ylim = c(-3, 3))
+abline(h = c(-2, 2), col = "red")
+```
+
+```{r}
+(chi2 <- with(stepmodel1, null.deviance - deviance))
+(ddl <- with(stepmodel1, df.null - df.residual))
+```
+
+loremmmmmmmmmmmmmmmmmmmmm (Modèle significatif)
+```{r}
+(pvalue <- pchisq(chi2, ddl, lower.tail = F))
+```
+
+```{r}
+data_study.pred<-cbind(data_study, predict(stepmodel1, newdata = data_study, type = "link", 
+    se = TRUE))
+head(data_study.pred)
+```
+
+```{r}
+data_study.pred <- within(data_study.pred, {
+    PredictedProb <- plogis(fit)
+    LL <- plogis(fit - (1.96 * se.fit))
+    UL <- plogis(fit + (1.96 * se.fit))
+})
+tail(data_study.pred)
+```
+#Matrice de confusion
+```{r}
+data_study.pred <- cbind(data_study.pred, pred.bon.vendeur = factor(ifelse(data_study.pred$PredictedProb > 
+    0.5, 1, 0)))
+head(data_study.pred)
+```
+
+```{r}
+# Matrice de confusion
+(m.confusion <- as.matrix(table(data_study.pred$pred.bon.vendeur, data_study.pred$AUG.FL.bonvendeur)))
+```
+
+```{r}
+m.confusion <- unclass(m.confusion)
+# Taux d'erreur
+Tx_err <- function(y, ypred) {
+    mc <- table(y, ypred)
+    error <- (mc[1, 2] + mc[2, 1])/sum(mc)
+    print(error)
+}
+Tx_err(data_study.pred$pred.bon.vendeur, data_study.pred$AUG.FL.bonvendeur)
+```
+
+#Tracé de la matrice de confusion
+```{r}
+library(ROCR)
+Pred = prediction(data_study.pred$PredictedProb, data_study.pred$AUG.FL.bonvendeur)
+Perf = performance(Pred, "tpr", "fpr")
+plot(Perf, colorize = TRUE, main = "Courbe ROC du modèle retenu")
+```
+
+```{r}
+perf <- performance(Pred, "auc")
+perf@y.values[[1]]
+```
+
